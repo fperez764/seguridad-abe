@@ -1,5 +1,6 @@
 import { Injectable, UnauthorizedException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { UsuarioService } from '../iam/services/usuario.service.js';
 import { LogAutenticacionService } from '../iam/services/log-autenticacion.service.js'; // ✅ Nuevo
 import { LdapService } from './ldap.service.js';
@@ -15,18 +16,28 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly ldapService: LdapService,
     private readonly otpService: OtpService,
+    private readonly configService: ConfigService,
   ) {}
 
   async loginStep1(ldapUid: string, password: string, ipOrigen?: string) {
     try {
-      // 1. Validar credenciales contra LDAP REAL
+      // 1. Validar credenciales contra LDAP REAL (cualquier usuario registrado)
       const ldapUser = await this.ldapService.validateUser(ldapUid, password);
 
-      // 2. Buscar o crear usuario en la BD
+      // 2. Derivar el correo corporativo desde LDAP; el dominio se toma de la
+      //    cuenta del propio usuario (o de EMAIL_FALLBACK_DOMAIN). Solo se crea
+      //    un correo "inventado" si LDAP no trae ninguno.
+      const ldapEmail: string | undefined =
+        ldapUser.mail || ldapUser.userPrincipalName || ldapUser.email;
+      const fallbackDomain =
+        this.configService.get<string>('EMAIL_FALLBACK_DOMAIN') || 'abe.bo';
+      const email = ldapEmail || `${ldapUid}@${fallbackDomain}`;
+
+      // 3. Buscar o crear usuario en la BD (provisioning automático)
       const user = await this.usuarioService.findOrCreateByLdap({
-        ldapUid: ldapUid,
-        email: ldapUser.mail || `${ldapUid}@abe.bo`,
-        nombreCompleto: ldapUser.cn || ldapUid,
+        ldapUid: ldapUid.trim().toLowerCase(),
+        email: email,
+        nombreCompleto: ldapUser.cn || ldapUser.displayName || ldapUid,
       });
 
       if (user.estadoUsuario !== 'ACTIVO') {

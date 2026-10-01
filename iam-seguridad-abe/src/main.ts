@@ -10,7 +10,7 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   // Confía en el proxy inverso (Nginx) para obtener la IP real del cliente (req.ip)
-  app.set('trust proxy', 1);
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
   // Validación global de DTOs en todos los endpoints
   app.useGlobalPipes(

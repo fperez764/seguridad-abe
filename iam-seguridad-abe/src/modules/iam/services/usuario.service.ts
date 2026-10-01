@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, ILike } from 'typeorm';
 import { Usuario } from '../entities/usuario.entity.js';
 
 @Injectable()
@@ -13,31 +13,35 @@ export class UsuarioService {
   ) {}
 
   /**
-   * Busca un usuario por su LDAP UID. Si no existe en la BD local, lo crea automáticamente.
+   * Busca un usuario por su LDAP UID (comparación insensible a mayúsculas).
+   * Si no existe en la BD local, lo crea automáticamente (JIT provisioning),
+   * de modo que CUALQUIER usuario válido registrado en LDAP pueda ingresar.
    */
   async findOrCreateByLdap(ldapData: { ldapUid: string; email: string; nombreCompleto: string }): Promise<Usuario> {
-    // 1. Intentar buscar el usuario en abeseg.seg_usuario
+    const uid = ldapData.ldapUid.trim().toLowerCase();
+
+    // 1. Intentar buscar el usuario en abeseg.seg_usuario (case-insensitive)
     let usuario = await this.usuarioRepository.findOne({
-      where: { ldapUid: ldapData.ldapUid },
+      where: { ldapUid: ILike(uid) },
     });
 
     if (usuario) {
       //  El usuario ya existe: actualizar fecha y usuario de modificación
       usuario.emailCorporativo = ldapData.email;
       usuario.nombreCompleto = ldapData.nombreCompleto;
-      usuario.usuMod = ldapData.ldapUid; // O 'SYSTEM' si prefieres
+      usuario.usuMod = uid; // O 'SYSTEM' si prefieres
       usuario.fecMod = new Date();
       await this.usuarioRepository.save(usuario);
     } else {
       //  El usuario no existe: crearlo
       usuario = this.usuarioRepository.create({
-        ldapUid: ldapData.ldapUid,
+        ldapUid: uid,
         emailCorporativo: ldapData.email,
         nombreCompleto: ldapData.nombreCompleto,
         estadoUsuario: 'ACTIVO',
-        usuCre: ldapData.ldapUid,
+        usuCre: uid,
         fecCre: new Date(),
-        usuMod: ldapData.ldapUid,
+        usuMod: uid,
         fecMod: new Date(),
       });
 

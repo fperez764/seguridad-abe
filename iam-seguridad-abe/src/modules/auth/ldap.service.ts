@@ -15,12 +15,17 @@ export class LdapService {
 
   constructor(private configService: ConfigService) {
     // 3. Ahora sí, TypeScript no se quejará de 'url' ni de 'Options'
+    // El filtro de búsqueda usa la plantilla {{username}} para que CUALQUIER
+    // usuario registrado en LDAP pueda autenticarse, sin listas blancas fijas.
     this.ldapClient = new LdapAuth({
       url: this.configService.getOrThrow<string>('LDAP_URL'),
       bindDN: this.configService.getOrThrow<string>('LDAP_BIND_DN'),
       bindCredentials: this.configService.getOrThrow<string>('LDAP_BIND_PASSWORD'),
       searchBase: this.configService.getOrThrow<string>('LDAP_SEARCH_BASE'),
-      searchFilter: this.configService.getOrThrow<string>('LDAP_SEARCH_FILTER'),
+      searchFilter:
+        this.configService.get<string>('LDAP_SEARCH_FILTER') || '(uid={{username}})',
+      // Reconnecta automáticamente si la conexión LDAP cae en segundo plano.
+      reconnectInterval: 300,
     });
 
     this.ldapClient.on('error', (err: any) => {
@@ -28,16 +33,35 @@ export class LdapService {
     });
   }
 
-  async validateUser(username: string, password: string): Promise<any> {
+  /**
+   * Normaliza el identificador recibido del cliente:
+   * - Quita espacios.
+   * - Si llega como correo (juan.perez@abe.bo), extrae el uid (juan.perez).
+   */
+  private normalizeUsername(input: string): string {
+    const trimmed = (input || '').trim();
+    const atIdx = trimmed.indexOf('@');
+    return atIdx > 0 ? trimmed.slice(0, atIdx) : trimmed;
+  }
+
+  async validateUser(usernameInput: string, password: string): Promise<any> {
+    const username = this.normalizeUsername(usernameInput);
+
+    if (!username || !password) {
+      throw new UnauthorizedException('Debe proporcionar usuario y contraseña');
+    }
+
     return new Promise((resolve, reject) => {
       this.logger.log(`🔍 Intentando autenticar usuario LDAP: ${username}`);
 
       this.ldapClient.authenticate(username, password, (err: any, user: any) => {
         if (err) {
-          this.logger.error(`❌ Error de validación LDAP: ${err.message}`);
-          reject(new UnauthorizedException('Error al conectar con el servidor LDAP o credenciales inválidas'));
+          // No filtramos si el fallo es "usuario no existe" o "mal password":
+          // ambos se responden igual para no revelar qué cuentas existen.
+          this.logger.warn(`❌ Falló la autenticación LDAP para "${username}": ${err.message}`);
+          reject(new UnauthorizedException('Usuario o contraseña incorrectos'));
         } else if (!user) {
-          this.logger.warn(`⚠️ Credenciales inválidas para el usuario: ${username}`);
+          this.logger.warn(`⚠️ Usuario no encontrado en LDAP: ${username}`);
           reject(new UnauthorizedException('Usuario o contraseña incorrectos'));
         } else {
           this.logger.log(`✅ Usuario autenticado correctamente en LDAP: ${username}`);
