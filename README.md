@@ -242,7 +242,7 @@ npm run start:dev
 cd frontend-web
 npm install
 npm run dev
-# Acceder a http://192.168.238.60:5173
+# Acceder a http://192.168.238.46:pppp
 ```
 
 ---
@@ -262,7 +262,7 @@ DB_NAME=gestion
 JWT_SECRET=tu_secret_super_seguro_aqui
 
 # LDAP
-LDAP_URL=ldap://192.168.238.46
+LDAP_URL=ldap://192.168.238.xx
 LDAP_BIND_DN=uid=freddy.perez,ou=people,dc=abe,dc=bo
 LDAP_BIND_PASSWORD=********
 LDAP_SEARCH_BASE=ou=people,dc=abe,dc=bo
