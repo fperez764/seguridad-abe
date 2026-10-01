@@ -62,8 +62,16 @@ export class EnvironmentVariables {
   @IsString()
   LDAP_SEARCH_BASE!: string;
 
+  @IsOptional()
   @IsString()
-  LDAP_SEARCH_FILTER!: string;
+  // Si no se define, se usa '(uid={{username}})': cualquier usuario
+  // registrado en LDAP puede autenticarse ({{username}} es la plantilla
+  // que ldapauth-fork reemplaza por el uid ingresado por el usuario).
+  LDAP_SEARCH_FILTER?: string;
+
+  @IsOptional()
+  @IsString()
+  EMAIL_FALLBACK_DOMAIN?: string;
 
   // --- SMTP (envío de OTP) ---
   @IsString()
