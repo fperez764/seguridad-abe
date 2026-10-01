@@ -5,8 +5,9 @@ import { AppService } from './app.service.js';
 export class AppController {
   constructor(private readonly appService: AppService) {}
 
-  @Get()
-  getHello(): string {
-    return this.appService.getHello();
+  // Health check para balanceadores / monitoreo (Nginx, PM2, uptime checks)
+  @Get('health')
+  getHealth(): { status: string; service: string; timestamp: string } {
+    return this.appService.getHealth();
   }
 }
