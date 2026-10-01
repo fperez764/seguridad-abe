@@ -1,15 +1,26 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomInt, timingSafeEqual } from 'crypto';
 import * as nodemailer from 'nodemailer';
+
+interface OtpEntry {
+  code: string;
+  expiresAt: number;
+  sentAt: number;
+  attempts: number;
+}
 
 @Injectable()
 export class OtpService {
   private readonly logger = new Logger(OtpService.name);
   private transporter: nodemailer.Transporter;
-  
+
   // Mapa temporal para almacenar OTPs (En producción se recomienda usar Redis)
-  // Estructura: email -> { code: string, expiresAt: number }
-  private otpStore = new Map<string, { code: string; expiresAt: number }>();
+  // Estructura: ldapUid -> OtpEntry
+  private otpStore = new Map<string, OtpEntry>();
+
+  private static readonly RESEND_INTERVAL_MS = 30 * 1000; // 30s entre envíos
+  private static readonly MAX_ATTEMPTS = 5; // intentos de validación por código
 
   constructor(private configService: ConfigService) {
     // Configuramos el transporter de Nodemailer con las variables del .env
@@ -25,13 +36,34 @@ export class OtpService {
   }
 
   async generateAndSendOtp(ldapUid: string, emailDestino: string): Promise<string> {
-    // 1. Generar código aleatorio de 6 dígitos
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-    
+    const entry = this.otpStore.get(ldapUid);
+    const now = Date.now();
+
+    // 0. Rate limiting básico: mínimo 30s entre envíos y máximo de intentos
+    if (entry) {
+      if (now - entry.sentAt < OtpService.RESEND_INTERVAL_MS) {
+        throw new UnauthorizedException(
+          'Ya se envió un código recientemente. Espera unos segundos antes de solicitar otro.',
+        );
+      }
+      if (entry.attempts >= OtpService.MAX_ATTEMPTS) {
+        this.otpStore.delete(ldapUid);
+        throw new UnauthorizedException(
+          'Demasiados intentos con códigos incorrectos. Inicia sesión nuevamente.',
+        );
+      }
+    }
+
+    // 1. Generar código aleatorio de 6 dígitos con criptografía fuerte
+    // (Math.random no es adecuado para tokens de seguridad)
+    const otpCode = randomInt(100000, 1000000).toString();
+
     // 2. Guardar en memoria con expiración de 5 minutos (300,000 ms)
     this.otpStore.set(ldapUid, {
       code: otpCode,
-      expiresAt: Date.now() + 5 * 60 * 1000,
+      expiresAt: now + 5 * 60 * 1000,
+      sentAt: now,
+      attempts: 0,
     });
 
     // 3. Configurar el correo
@@ -57,19 +89,18 @@ export class OtpService {
       this.logger.log(`✅ OTP generado para [${ldapUid}] y enviado a ${emailDestino}`);
       return otpCode; // Retornamos el código solo para logs o pruebas
     } catch (error: any) {
+      // Si el correo no se envió, no dejamos un OTP huérfano en memoria
+      this.otpStore.delete(ldapUid);
       this.logger.error(`❌ Error al enviar OTP a ${ldapUid}: ${error.message}`);
       throw new Error('No se pudo enviar el código de verificación al correo');
     }
   }
 
-  validateOtp(ldapUid: string, otpCode: string): boolean { 
-    // PARA VER QUÉ ESTÁ PASANDO EN LA TERMINAL
-    //this.logger.log(`🔍 Espía: Buscando OTP para email [${ldapUid}] y código [${otpCode}]`);
-    
+  validateOtp(ldapUid: string, otpCode: string): boolean {
     const stored = this.otpStore.get(ldapUid);
-    
+
     if (!stored) {
-      this.logger.warn(`⚠️ No se encontró OTP guardado para el email: ${ldapUid}`);
+      this.logger.warn(`⚠️ No se encontró OTP guardado para el usuario: ${ldapUid}`);
       return false;
     }
 
@@ -79,13 +110,27 @@ export class OtpService {
       return false;
     }
 
-    // Si el código no coincide
-    if (stored.code !== otpCode) {
-      return false;
+    // Comparación en tiempo constante para evitar timing attacks
+    if (timingSafeEqualStr(stored.code, otpCode)) {
+      // ¡Éxito! Eliminamos el OTP para que no pueda ser reutilizado (one-time use)
+      this.otpStore.delete(ldapUid);
+      return true;
     }
 
-    // ¡Éxito! Eliminamos el OTP para que no pueda ser reutilizado (one-time use)
-    this.otpStore.delete(ldapUid);
-    return true;
+    // Código incorrecto: contabilizamos el intento (rate limiting)
+    stored.attempts += 1;
+    if (stored.attempts >= OtpService.MAX_ATTEMPTS) {
+      this.otpStore.delete(ldapUid);
+      this.logger.warn(`🚫 Múltiples intentos fallidos de OTP para [${ldapUid}]. Código invalidado.`);
+    }
+    return false;
   }
+}
+
+/** Comparación de cadenas en tiempo constante */
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
 }
